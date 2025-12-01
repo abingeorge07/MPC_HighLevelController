@@ -36,9 +36,21 @@ public:
     ObstacleLoader(const std::string& filepath);
     bool loadObstacles();
     void printObstacles();
+    double sdfBox2d(const Eigen::Vector2d& point, int idx);
+    double sdfBox2d_test(void);
+    double distanceToObstacle(const Eigen::Vector3d& point);
+    double test_distanceToObstacle(void);
+    int getNumObstacles() const { return num_obstacles; }
+    void linearizeBoxConstraint(int idx, const Eigen::Vector2d& point, double inflation,
+                                Eigen::Vector2d& normal_out, double& rhs_out);
+
+    void closest_point_on_obb(const BoxObstacle& box, const Eigen::Vector2d& point,
+                              Eigen::Vector2d& closest_out);
+    struct Obstacle obstacle_data;
 private:
     std::string filepath;
     ObstacleType obstacle_type;
-    struct Obstacle obstacle_data;
+    int num_obstacles;
 };
 #endif // MPC_OBSTACLELOADER_HPP
+

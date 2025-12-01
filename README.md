@@ -14,3 +14,15 @@ cd build
 cmake ..
 make -j4
 ```
+
+## Dependencies
+- Eigen3
+- OSQP-Eigen
+
+## To DO
+
+```markdown
+- [x] Create MPC formulation
+- [ ] Test MPC forumulation
+- [ ] Get visuals (not critical) 
+```

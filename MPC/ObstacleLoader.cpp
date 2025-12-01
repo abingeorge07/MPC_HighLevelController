@@ -28,12 +28,19 @@ ObstacleLoader::ObstacleLoader(const std::string& filepath) {
 
     // Print loaded obstacles for verification
     // this->printObstacles();
+
+    // Test SDF function
+    // this->sdfBox2d_test();
+
+    // Test distance to obstacle function
+    // this->test_distanceToObstacle();
 }
 
 bool ObstacleLoader::loadObstacles() {
     // Load obstacle data from the specified file
     std::cout << "Loading obstacles from: " << filepath << std::endl;
 
+    num_obstacles = -1;
     // Open the JSON file
     std::ifstream file(filepath);
     if (!file.is_open()) {
@@ -80,6 +87,8 @@ bool ObstacleLoader::loadObstacles() {
 
     }
 
+    num_obstacles = obstacle_data.boxes.size();
+
     return true;
 }
 
@@ -91,4 +100,102 @@ void ObstacleLoader::printObstacles() {
         std::cout << "  Size: [" << box.size.transpose() << "]" << std::endl;
         std::cout << "  Rotation Matrix:\n" << box.rotation << std::endl;
     }
+}
+
+// Signed Distance Function for 2D Box Obstacle
+double ObstacleLoader::sdfBox2d(const Eigen::Vector2d& point, int idx) {
+    const BoxObstacle& obs = obstacle_data.boxes[idx];
+    // Transform point to obstacle's local frame
+    Eigen::Vector2d local_point = point - obs.position.head<2>();
+    Eigen::Matrix2d rot_2d = obs.rotation.topLeftCorner<2,2>();
+    local_point = rot_2d.transpose() * local_point; // Inverse rotation
+    Eigen::Vector2d half_size = obs.size.head<2>() * 0.5;   
+    Eigen::Vector2d d = local_point.cwiseAbs() - half_size;
+
+    // If both components of d are negative, point is inside the box
+    double outside = std::max(d.x(), 0.0)*std::max(d.x(), 0.0) + std::max(d.y(), 0.0)*std::max(d.y(), 0.0); 
+    outside = std::sqrt(outside); // If outside is zero, point is inside box
+
+    // If outside, the first max will be positive, then min of positive and 0 is 0
+    // If inside, both max are negative, will choose the one that is closer to the edge
+    // then, min with 0 will keep it negative
+    double inside = std::min(std::max(d.x(), d.y()), 0.0);
+    return inside + outside;
+}
+
+
+// Test function for sdfBox2d
+double ObstacleLoader::sdfBox2d_test(void) {
+    BoxObstacle test_box;
+    test_box.position = Eigen::Vector3d(0.0, 0.0, 0.0);
+    test_box.size = Eigen::Vector3d(2.0, 2.0, 2.0);
+    test_box.rotation = Eigen::Matrix3d::Identity();
+    Eigen::Vector2d test_point(0.85, 0.25);
+    double distance = sdfBox2d(test_point, 0);
+    std::cout << "SDF Distance to Box: " << distance << std::endl;
+    return distance;
+}
+
+// Compute distance from a 3D point to the nearest obstacle
+double ObstacleLoader::distanceToObstacle(const Eigen::Vector3d& point) {
+    double min_distance = std::numeric_limits<double>::max();
+    Eigen::Vector2d point_2d(point.x(), point.y());
+    for (size_t box = 0; box < obstacle_data.boxes.size(); ++box) {
+        double dist = sdfBox2d(point_2d, box);
+        if (dist < min_distance) {
+            min_distance = dist;
+        }
+    }
+    return min_distance;
+}
+
+// Test function for distanceToObstacle
+double ObstacleLoader::test_distanceToObstacle(void) {
+    Eigen::Vector3d point(0.85, 0.25, 0.0); // Example test point
+    double dist = distanceToObstacle(point);
+    std::cout << "Distance to Nearest Obstacle: " << dist << std::endl;
+    return dist;
+}
+
+void ObstacleLoader::closest_point_on_obb(const BoxObstacle& box, const Eigen::Vector2d& point,
+                                     Eigen::Vector2d& closest_out) {
+    // Transform point to obstacle's local frame
+    Eigen::Vector2d local_point = point - box.position.head<2>();
+    Eigen::Matrix2d rot_2d = box.rotation.topLeftCorner<2,2>();
+    local_point = rot_2d.transpose() * local_point; // Inverse rotation
+
+    Eigen::Vector2d half_size = box.size.head<2>() * 0.5;
+    Eigen::Vector2d clamped;
+    clamped.x() = std::max(-half_size.x(), std::min(half_size.x(), local_point.x()));
+    clamped.y() = std::max(-half_size.y(), std::min(half_size.y(), local_point.y()));
+
+    // Transform back to world frame
+    closest_out = rot_2d * clamped + box.position.head<2>();
+}
+
+// Linearize box constraint at a given point
+void ObstacleLoader::linearizeBoxConstraint(int idx, const Eigen::Vector2d& point, double inflation,
+                                           Eigen::Vector2d& normal_out, double& rhs_out) {
+    const BoxObstacle& obs = obstacle_data.boxes[idx];
+
+    Eigen::Vector2d q;
+    
+    closest_point_on_obb(obs, point, q);
+
+    Eigen::Vector2d diff = point - q;
+
+    double d = diff.norm();
+    
+    if (d < 1e-8) {
+        // fallback: use vector from box center to pred
+        diff = point - obs.position.head<2>();
+        d = diff.norm();
+        if (d < 1e-8) {
+            normal_out = Eigen::Vector2d(1.0, 0.0);
+            rhs_out = normal_out.dot(q) + inflation;
+            return;
+        }
+    }
+    normal_out = diff / d;
+    rhs_out = normal_out.dot(q) + inflation;
 }

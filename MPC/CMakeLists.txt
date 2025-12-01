@@ -20,6 +20,13 @@ target_include_directories(MPC
 find_package(Eigen3 3.3 REQUIRED)
 target_link_libraries(MPC PUBLIC Eigen3::Eigen)
 
+
+# Link OSQP and OSQP-Eigen
+find_package(OsqpEigen REQUIRED)
+#
+# include_directories(${OSQP_EIGEN_INCLUDE_DIRS})
+target_link_libraries(MPC PUBLIC OsqpEigen::OsqpEigen)
+
 # Require C++17 for this target
 target_compile_features(MPC PUBLIC cxx_std_17)
 
