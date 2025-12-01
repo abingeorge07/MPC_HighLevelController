@@ -19,10 +19,15 @@ ObstacleLoader::ObstacleLoader(const std::string& filepath) {
     }
     else
         obstacle_type = ObstacleType::WALKABLE;
+
+    
     // Prepend model directory to the filepath
     this->filepath = model_dir / filepath;
 
     this->loadObstacles();
+
+    // Print loaded obstacles for verification
+    // this->printObstacles();
 }
 
 bool ObstacleLoader::loadObstacles() {
@@ -45,10 +50,45 @@ bool ObstacleLoader::loadObstacles() {
         return false;
     }
 
+    // Update the obstacle type 
+    obstacle_data.type = obstacle_type;
     for (auto& obs : j) {
         BoxObstacle obstacle;
-        std::cout << "Position of the obstacle is: " << obs["position"] << std::endl;
+
+        // Fill obstacle data
+        obstacle.position = Eigen::Vector3d(
+            (double)obs["position"][0],
+            (double)obs["position"][1],
+            (double)obs["position"][2]
+        );
+
+        obstacle.size = Eigen::Vector3d(
+            (double)obs["size"][0],
+            (double)obs["size"][1],
+            (double)obs["size"][2]
+        );
+
+        // Assuming rotation is given as Euler angles in radians
+        // We only care about yaw (rotation around Z-axis) for ground obstacles
+        double yaw = (double)obs["euler"][2];
+        Eigen::Matrix3d rotation;
+        rotation = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ());
+        obstacle.rotation = rotation;
+
+        // Add to the list of obstacles
+        obstacle_data.boxes.push_back(obstacle);
+
     }
 
     return true;
+}
+
+void ObstacleLoader::printObstacles() {
+    std::cout << "Obstacle Type: " << (obstacle_data.type == ObstacleType::UNWALKABLE ? "UNWALKABLE" : "WALKABLE") << std::endl;
+    for (const auto& box : obstacle_data.boxes) {
+        std::cout << "Box Obstacle:" << std::endl;
+        std::cout << "  Position: [" << box.position.transpose() << "]" << std::endl;
+        std::cout << "  Size: [" << box.size.transpose() << "]" << std::endl;
+        std::cout << "  Rotation Matrix:\n" << box.rotation << std::endl;
+    }
 }
