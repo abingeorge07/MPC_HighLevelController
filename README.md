@@ -2,13 +2,13 @@
 High Level Controller for Robot Applications via Model Predictive Control
 
 
-## Update Submodules
-```
+## Update Submodules 
+``` bash
 git submodule update --init --recursive
 ```
 
 ## Build
-```
+``` bash
 mkdir build
 cd build
 cmake ..
