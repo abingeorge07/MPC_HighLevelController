@@ -20,6 +20,10 @@ target_include_directories(MPC
 find_package(Eigen3 3.3 REQUIRED)
 target_link_libraries(MPC PUBLIC Eigen3::Eigen)
 
+# Link yaml-cpp
+find_package(yaml-cpp REQUIRED)
+target_link_libraries(MPC PUBLIC yaml-cpp)
+
 
 # Link OSQP and OSQP-Eigen
 find_package(OsqpEigen REQUIRED)

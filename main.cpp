@@ -8,6 +8,7 @@
 */
 #include <iostream>
 #include "MPCController.hpp"
+#include <fstream>
 
 void find_next_state(Eigen::Vector3d& x, const Eigen::Vector2d& u, double dt) {
     // Simple unicycle model
@@ -31,6 +32,10 @@ int main(int argc, char** argv) {
     // std::string configFile = argv[1];
     // std::string obstacleFile = argv[2];
 
+    // Output csv file for logging the states
+    std::ofstream logFile("../visuals/mpc_log.csv");
+    logFile << "x,y,theta\n";
+
     std::string obstacleFile = "Obstacle_Info/obstacle.json";
 
     // Initialize MPC Controller
@@ -41,11 +46,14 @@ int main(int argc, char** argv) {
     Eigen::Vector3d goal(5.0, 5.0, 0.0); // Example goal state
 
     // Num of iterations to run
-    int num_iterations = 1000;
+    int num_iterations = 10;
 
     for (int i = 0; i < num_iterations; ++i) {   
         // Set references
         mpcController.set_references(x0, goal);
+
+        // Log current state
+        logFile << x0[0] << "," << x0[1] << "," << x0[2] << "\n";
 
         // Solve MPC to get initial control
         Eigen::Vector2d u0;
@@ -58,9 +66,11 @@ int main(int argc, char** argv) {
         std::cout << "Current state: [" << x0.transpose() << "], Applied control: [" << u0.transpose() << "]" << std::endl;
 
         // Here, you would apply u0 to the system and update x0 accordingly
-        find_next_state(x0, u0, 0.1); // Placeholder function to update state [MAKE SURE THE DT IS THE SAME AS MPC DT]
+        find_next_state(x0, u0, mpcController.cost_params.dt); // Placeholder function to update state [MAKE SURE THE DT IS THE SAME AS MPC DT]
 
     }
+
+    logFile.close();
 
     return 0;
 }

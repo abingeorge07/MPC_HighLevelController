@@ -8,19 +8,24 @@ MPCController::MPCController(const std::string& ObstacleFile) {
     // Load configuration from file
     std::cout << "MPCController initialized "<< std::endl;
 
+    // Load YAML file
+    YAML::Node config = YAML::LoadFile("../config.yaml");
+
+    // Get horizon and dt from YAML
+    cost_params.N = config["high_level_param"]["horizon"].as<int>();
+    cost_params.dt = config["high_level_param"]["time_step"].as<double>();
+
     // Save the number of states and controls
     nx_ = 3; // e.g., [x, y, theta]
     nu_ = 2; // e.g., [v, omega]
-    N_ = 20; // prediction horizon
-     
+    N_ = cost_params.N; // prediction horizon
+
     // Update the MPC Cost Params here
     // Update Q, R, Qf, S_delta as needed
     cost_params.Q = Eigen::Matrix3d::Identity();
     cost_params.R = Eigen::Matrix2d::Identity() * 0.1;
     cost_params.Qf = Eigen::Matrix3d::Identity() * 10.0;
     cost_params.S_delta = Eigen::Matrix2d::Identity() * 1.0;
-    cost_params.dt = 0.01;
-    cost_params.N = N_;
     cost_params.w_speed_max = 10.0;
 
     // warm start buffers

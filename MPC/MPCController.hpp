@@ -7,6 +7,7 @@
 #include <Eigen/Dense>
 #include "ObstacleLoader.hpp"
 #include <OsqpEigen/OsqpEigen.h>
+#include <yaml-cpp/yaml.h>
 
 #define VERBOSITY false
 
@@ -58,8 +59,8 @@ public:
                         Eigen::SparseMatrix<double> &A_out,
                         Eigen::VectorXd &lb_out, Eigen::VectorXd &ub_out);
 
-private:
     MPCCostParams cost_params;
+private:
     int nx_; // number of states
     int nu_; // number of controls
     int N_;  // prediction horizon
