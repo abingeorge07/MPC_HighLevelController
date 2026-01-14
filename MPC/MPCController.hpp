@@ -25,7 +25,7 @@ struct MPCCostParams {
     double W_slack = 1e5;            // slack penalty
     double w_speed_max = 10.0;       // max weight for speed reduction
     double v_max = 5.0;              // max linear velocity
-    double w_max = 4.0;              // max angular velocity
+    double w_max = 0.0;              // max angular velocity
     double d_limit = 1.0;            // distance at which speed shaping begins
     double v_safe = 0.2;             // safe reduced speed near obstacles
     int nearestK = 3;                // number of nearest obstacles to consider
@@ -73,6 +73,12 @@ private:
     std::unique_ptr<ObstacleLoader> obstacle_loader_;
     // Number of obstacles
     int num_obstacles_;
+
+    // First solve
+    bool first_solve_ = true;
+
+    double v_ref_ = 0.3; // nominal forward speed
+    double w_ref_ = 0.0; // nominal angular speed
 
     
     // Private functions

@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     Eigen::Vector3d goal(5.0, 5.0, 0.0); // Example goal state
 
     // Num of iterations to run
-    int num_iterations = 10;
+    int num_iterations = 10000;
 
     for (int i = 0; i < num_iterations; ++i) {   
         // Set references
