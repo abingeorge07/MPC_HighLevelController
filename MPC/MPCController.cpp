@@ -22,16 +22,20 @@ MPCController::MPCController(const std::string& ObstacleFile) {
 
     // Update the MPC Cost Params here
     // Update Q, R, Qf, S_delta as needed
-    // cost_params.Q  = Eigen::Matrix3d::Identity() * 1.0;     // FIX: running cost
+
+    // Cost for tracking states (intermediate)
     cost_params.Q = (Eigen::Matrix3d() <<
-                                            1e-3, 0,    0,
-                                            0,    1e-3, 0,
-                                            0,    0,    1e-4
+                                            1e-5, 0,    0,
+                                            0,    1e-5, 0,
+                                            0,    0,    1e-6
                                         ).finished();
 
+    // Cost for tracking controls (intermediate)
     cost_params.R  = Eigen::Matrix2d::Identity() * 0.01;
-    cost_params.Qf = Eigen::Matrix3d::Identity() * 500.0;
-    cost_params.S_delta = Eigen::Matrix2d::Identity() * 0.001;
+    cost_params.Qf = Eigen::Matrix3d::Identity() * 1000.0;
+
+    // Smoothness cost on delta u
+    cost_params.S_delta = Eigen::Matrix2d::Identity() * 0.5;
 
     cost_params.w_speed_max = 10.0;
 
@@ -128,7 +132,7 @@ void MPCController::build_mpc_cost_dense(const std::vector<double> &distances,
 
   // estimate slack count: upper bound K_per_step * N; in this cost-only builder we need slack variables to allocate space.
   int K_per_step = 1; // at least one slack per timestep (worst-case single aggregated slack)
-  int n_slack = 0;//K_per_step * N;
+  int n_slack = K_per_step * N;
 
   int n_u = N * nu;
   int n_x = N * nx; // x1..xN
@@ -139,8 +143,8 @@ void MPCController::build_mpc_cost_dense(const std::vector<double> &distances,
   slack_base = n_u + n_x;
 
   // init
-  H_out = Mat::Zero(n_var, n_var);
-  g_out = Vec::Zero(n_var);
+  H_out = Mat::Zero(n_var, n_var); // Hessian
+  g_out = Vec::Zero(n_var); // linear term
 
   auto u_idx = [&](int k)->int { return k * nu; };                      // 0..N-1
   auto x_idx = [&](int k)->int { return n_u + (k-1) * nx; };           // k in 1..N
@@ -157,36 +161,36 @@ void MPCController::build_mpc_cost_dense(const std::vector<double> &distances,
   }
 
   // 2) state cost for x_{k+1}
-  for (int k = 1; k <= N; ++k) {
-    int xi = x_idx(k);
-    // get Q or Qf for terminal
-    if (k < N) {
-      H_out.block(xi, xi, nx, nx) += P.Q;
-      Eigen::Vector3d xr = xref_[k];
-      g_out.segment(xi, nx) += -2.0 * (P.Q * xr);
-    } else { // terminal k==N
-      H_out.block(xi, xi, nx, nx) += P.Qf;
-      g_out.segment(xi, nx) += -2.0 * (P.Qf * goal_);
-    }
-  }
+  // for (int k = 1; k <= N; ++k) {
+  //   int xi = x_idx(k);
+  //   // get Q or Qf for terminal
+  //   if (k < N) {
+  //     H_out.block(xi, xi, nx, nx) += P.Q;
+  //     Eigen::Vector3d xr = xref_[k];
+  //     g_out.segment(xi, nx) += -2.0 * (P.Q * xr);
+  //   } else { // terminal k==N
+  //     H_out.block(xi, xi, nx, nx) += P.Qf;
+  //     g_out.segment(xi, nx) += -2.0 * (P.Qf * goal_);
+  //   }
+  // }
 
   // 3) delta-u smoothness: (u_k - u_{k-1})^T S (u_k - u_{k-1})
-  for (int k = 0; k < N; ++k) {
-    int ui = u_idx(k);
-    if (k == 0) {
-      // u_prev known -> S on u0 and linear term
-      H_out.block(ui, ui, nu, nu) += P.S_delta;
-      g_out.segment(ui, nu) += -2.0 * (P.S_delta * u_prev_);
-    } else {
-      int uim1 = u_idx(k - 1);
-      // add S to diag blocks
-      H_out.block(ui, ui, nu, nu) += P.S_delta;
-      H_out.block(uim1, uim1, nu, nu) += P.S_delta;
-      // add off-diagonal -S (symmetric)
-      H_out.block(ui, uim1, nu, nu) += -P.S_delta;
-      H_out.block(uim1, ui, nu, nu) += -P.S_delta;
-    }
-  }
+  // for (int k = 0; k < N; ++k) {
+  //   int ui = u_idx(k);
+  //   if (k == 0) {
+  //     // u_prev known -> S on u0 and linear term
+  //     H_out.block(ui, ui, nu, nu) += P.S_delta;
+  //     g_out.segment(ui, nu) += -2.0 * (P.S_delta * u_prev_);
+  //   } else {
+  //     int uim1 = u_idx(k - 1);
+  //     // add S to diag blocks
+  //     H_out.block(ui, ui, nu, nu) += P.S_delta;
+  //     H_out.block(uim1, uim1, nu, nu) += P.S_delta;
+  //     // add off-diagonal -S (symmetric)
+  //     H_out.block(ui, uim1, nu, nu) += -P.S_delta;
+  //     H_out.block(uim1, ui, nu, nu) += -P.S_delta;
+  //   }
+  // }
 
   // 4) speed shaping: w_k * (v_k - v_safe)^2 -> affects only v (first control)
   // for (int k = 0; k < N; ++k) {
@@ -202,11 +206,11 @@ void MPCController::build_mpc_cost_dense(const std::vector<double> &distances,
   // }
 
   // 5) slack diagonal penalty W_s (for each slack variable)
-  for (int s = 0; s < n_slack; ++s) {
-    int si = slack_base + s;
-    H_out(si, si) += P.W_slack;
-    // no linear term unless you want to bias slack use
-  }
+  // for (int s = 0; s < n_slack; ++s) {
+  //   int si = slack_base + s;
+  //   H_out(si, si) += P.W_slack;
+  //   // no linear term unless you want to bias slack use
+  // }
 
   // Note: There is no factor of 0.5 here — we built H and g so that the QP uses 0.5*z^T*H*z + g^T*z
   // (with symmetric H). This is the standard OSQP convention.
