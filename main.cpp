@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
 
     // Assume initial state and goal are set here
     Eigen::Vector3d x0(0.0, 0.0, 0.0); // Example initial state
-    Eigen::Vector3d goal(5.0, 5.0, 0.0); // Example goal state
+    Eigen::Vector3d goal(100.0, 0.0, 0.0); // Example goal state
 
     // Num of iterations to run
     int num_iterations = 10000;

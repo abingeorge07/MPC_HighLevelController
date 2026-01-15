@@ -24,20 +24,24 @@ MPCController::MPCController(const std::string& ObstacleFile) {
     // Update Q, R, Qf, S_delta as needed
 
     // Cost for tracking states (intermediate)
-    cost_params.Q = (Eigen::Matrix3d() <<
-                                            1e-5, 0,    0,
-                                            0,    1e-5, 0,
-                                            0,    0,    1e-6
-                                        ).finished();
+    // cost_params.Q = (Eigen::Matrix3d() <<
+    //                                         1e-5, 0,    0,
+    //                                         0,    1e-5, 0,
+    //                                         0,    0,    1e-6
+    //                                     ).finished();
 
     // Cost for tracking controls (intermediate)
-    cost_params.R  = Eigen::Matrix2d::Identity() * 0.01;
-    cost_params.Qf = Eigen::Matrix3d::Identity() * 1000.0;
+    cost_params.Q = Eigen::Matrix3d::Identity() * 10.0;
+    cost_params.R  = Eigen::Matrix2d::Identity() * 100.0;
+    cost_params.Qf = Eigen::Matrix3d::Identity() * 5000.0;
 
     // Smoothness cost on delta u
-    cost_params.S_delta = Eigen::Matrix2d::Identity() * 0.5;
+    cost_params.S_delta = Eigen::Matrix2d::Identity() * 10.0;
 
-    cost_params.w_speed_max = 10.0;
+    cost_params.w_speed_max = 50.0;
+
+    // Update the W_slack value
+    cost_params.W_slack = 1e6;
 
     // warm start buffers
     xpred_.assign(N_+1, Eigen::Vector3d::Zero());
@@ -81,37 +85,41 @@ void MPCController::buildReferences()
     xref_.assign(N_ + 1, Eigen::Vector3d::Zero());
     uref_.assign(N_, Eigen::Vector2d::Zero());
 
-    // Only terminal reference matters
-    xref_[N_] = goal_;
+    // --- Direction to goal --- // Remains constant since moving in straight line
+    Eigen::Vector2d dp = goal_.head<2>() - x0_.head<2>();
+
+    double path_theta = std::atan2(dp.y(), dp.x());
 
     // --- State reference: straight-line interpolation ---
-    // for (int k = 0; k <= N_; ++k) {
-    //     double a = static_cast<double>(k) / static_cast<double>(N_);
-    //     xref_[k] = (1.0 - a) * x0_ + a * goal_;
-    // }
+    for (int k = 0; k <= N_; ++k) {
+        double a = static_cast<double>(k) / static_cast<double>(N_);
+        xref_[k].head<2>() = (1.0 - a) * x0_.head<2>() + a * goal_.head<2>();
+        xref_[k](2) = path_theta;
+    }
 
-    // // --- Control reference ---
-    // // Distance to goal
-    // Eigen::Vector2d dp = goal_.head<2>() - x0_.head<2>();
-    // double dist_to_goal = dp.norm();
+    // --- Control reference ---
+    // Distance to goal
+    double dist_to_goal = dp.norm();
 
     // // Nominal forward speed
-    // double v_nom = v_ref_;        // e.g. 0.3 m/s
-    // double w_nom = w_ref_;
+    double v_nom = v_ref_;        // e.g. 0.3 m/s
+    double w_nom = w_ref_;
 
     // // Slow down when close to goal
-    // double slow_radius = 0.5;     // meters
-    // if (dist_to_goal < slow_radius) {
-    //     v_nom *= dist_to_goal / slow_radius;
-    // }
+    double slow_radius = 0.5;     // meters
+    if (dist_to_goal < slow_radius) {
+        v_nom *= dist_to_goal / slow_radius;
+    }
 
-    // // Initialize uref only on first solve (warm start logic)
-    // if (first_solve_) {
-    //     for (int k = 0; k < N_; ++k) {
-    //         uref_[k] << v_nom, w_nom;
-    //     }
-    // }
+    // Initialize uref only on first solve (warm start logic)
+    if (first_solve_) {
+        for (int k = 0; k < N_; ++k) {
+            uref_[k] << v_nom, w_nom;
+        }
+    }
 }
+
+
 // Set initial and final states and build reference trajectories
 void MPCController::set_references(const Eigen::Vector3d& x0, const Eigen::Vector3d& goal) {
     this->set_initial_state(x0);
@@ -154,63 +162,62 @@ void MPCController::build_mpc_cost_dense(const std::vector<double> &distances,
   for (int k = 0; k < N; ++k) {
     int ui = u_idx(k);
     H_out.block(ui, ui, nu, nu) += P.R;
-    // g_out(ui + 0) += -2.0;   // encourage positive velocity
     // linear term: g += -2 * R * u_ref
     Eigen::Vector2d uref = uref_[k];
     g_out.segment(ui, nu) += -2.0 * (P.R * uref);
   }
 
   // 2) state cost for x_{k+1}
-  // for (int k = 1; k <= N; ++k) {
-  //   int xi = x_idx(k);
-  //   // get Q or Qf for terminal
-  //   if (k < N) {
-  //     H_out.block(xi, xi, nx, nx) += P.Q;
-  //     Eigen::Vector3d xr = xref_[k];
-  //     g_out.segment(xi, nx) += -2.0 * (P.Q * xr);
-  //   } else { // terminal k==N
-  //     H_out.block(xi, xi, nx, nx) += P.Qf;
-  //     g_out.segment(xi, nx) += -2.0 * (P.Qf * goal_);
-  //   }
-  // }
+  for (int k = 1; k <= N; ++k) {
+    int xi = x_idx(k);
+    // get Q or Qf for terminal
+    if (k < N) {
+      H_out.block(xi, xi, nx, nx) += P.Q;
+      Eigen::Vector3d xr = xref_[k];
+      g_out.segment(xi, nx) += -2.0 * (P.Q * xr);
+    } else { // terminal k==N
+      H_out.block(xi, xi, nx, nx) += P.Qf;
+      g_out.segment(xi, nx) += -2.0 * (P.Qf * goal_);
+    }
+  }
 
   // 3) delta-u smoothness: (u_k - u_{k-1})^T S (u_k - u_{k-1})
-  // for (int k = 0; k < N; ++k) {
-  //   int ui = u_idx(k);
-  //   if (k == 0) {
-  //     // u_prev known -> S on u0 and linear term
-  //     H_out.block(ui, ui, nu, nu) += P.S_delta;
-  //     g_out.segment(ui, nu) += -2.0 * (P.S_delta * u_prev_);
-  //   } else {
-  //     int uim1 = u_idx(k - 1);
-  //     // add S to diag blocks
-  //     H_out.block(ui, ui, nu, nu) += P.S_delta;
-  //     H_out.block(uim1, uim1, nu, nu) += P.S_delta;
-  //     // add off-diagonal -S (symmetric)
-  //     H_out.block(ui, uim1, nu, nu) += -P.S_delta;
-  //     H_out.block(uim1, ui, nu, nu) += -P.S_delta;
-  //   }
-  // }
+  for (int k = 0; k < N; ++k) {
+    int ui = u_idx(k);
+    if (k == 0) {
+      // u_prev known -> S on u0 and linear term
+      H_out.block(ui, ui, nu, nu) += P.S_delta;
+      g_out.segment(ui, nu) += -2.0 * (P.S_delta * u_prev_);
+    } else {
+      int uim1 = u_idx(k - 1);
+      // add S to diag blocks
+      H_out.block(ui, ui, nu, nu) += P.S_delta;
+      H_out.block(uim1, uim1, nu, nu) += P.S_delta;
+      // add off-diagonal -S (symmetric)
+      H_out.block(ui, uim1, nu, nu) += -P.S_delta;
+      H_out.block(uim1, ui, nu, nu) += -P.S_delta;
+    }
+  }
 
   // 4) speed shaping: w_k * (v_k - v_safe)^2 -> affects only v (first control)
-  // for (int k = 0; k < N; ++k) {
-  //   int ui = u_idx(k);
-  //   double d = distances[k];
-  //   double ramp = 0.0;
-  //   if (d < P.d_limit) ramp = (P.d_limit - d) / P.d_limit;
-  //   double w_k = P.w_speed_max * std::max(0.0, ramp);
-  //   // add to H at v component (index ui + 0)
-  //   H_out(ui + 0, ui + 0) += w_k;
-  //   // linear term: -2 * w_k * v_safe
-  //   g_out(ui + 0) += -2.0 * w_k * P.v_safe;
-  // }
+  for (int k = 0; k < N; ++k) {
+    int ui = u_idx(k);
+    double d = distances[k];
+    double ramp = 0.0;
+    if (d < P.d_limit) ramp = (P.d_limit - d) / P.d_limit;
+    double w_k = P.w_speed_max * std::max(0.0, ramp);
+    // add to H at v component (index ui + 0)
+    H_out(ui + 0, ui + 0) += w_k;
+    // linear term: -2 * w_k * v_safe
+    g_out(ui + 0) += -2.0 * w_k * P.v_safe;
+  }
 
   // 5) slack diagonal penalty W_s (for each slack variable)
-  // for (int s = 0; s < n_slack; ++s) {
-  //   int si = slack_base + s;
-  //   H_out(si, si) += P.W_slack;
-  //   // no linear term unless you want to bias slack use
-  // }
+  for (int s = 0; s < n_slack; ++s) {
+    int si = slack_base + s;
+    H_out(si, si) += P.W_slack;
+    // no linear term unless you want to bias slack use
+  }
 
   // Note: There is no factor of 0.5 here — we built H and g so that the QP uses 0.5*z^T*H*z + g^T*z
   // (with symmetric H). This is the standard OSQP convention.
@@ -251,9 +258,9 @@ void MPCController::buildConstraints(const std::vector<double> &distances,
     int dyn_rows = N * nx;
     int bound_rows = n_u; // one row per variable using lb/ub
     // int bound_rows = 0; // we will not add explicit input bounds here
-    // int obs_rows = 0;
-    // for (int k=0;k<N;k++) obs_rows += (int)obs_lin[k].size();
-    int total_rows = dyn_rows + bound_rows; // + obs_rows;
+    int obs_rows = 0;
+    for (int k=0;k<N;k++) obs_rows += (int)obs_lin[k].size();
+    int total_rows = dyn_rows + bound_rows + obs_rows;
 
     // std::cout << "[MPCController] Building constraints: total_rows=" << total_rows 
               // << " (dyn:" << dyn_rows << ", bound:" << bound_rows << ", obs:" << obs_rows << ")" << std::endl;
@@ -354,29 +361,25 @@ void MPCController::buildConstraints(const std::vector<double> &distances,
 
     // 3) Obstacle inequalities: for each k and each linearized obs constraint add:
     // n^T p_{k+1} - s_i >= rhs  --> variables: px,py indices inside x block, slack index
-    // int slack_counter = 0;
-    // for (int k=0;k<N;k++){
-    //   int xkp1_idx = n_u + k*nx;
-    //   for (size_t cidx=0;cidx<obs_lin[k].size();++cidx){
-    //     auto pr = obs_lin[k][cidx];
-    //     Eigen::Vector2d n = pr.first;
-    //     double rhs = pr.second;
-    //     // n_x * px + n_y * py - 1 * s >= rhs
-    //     triplets.emplace_back(row, xkp1_idx + 0, n.x());
-    //     triplets.emplace_back(row, xkp1_idx + 1, n.y());
-    //     int sidx = slack_base + slack_counter;
-    //     triplets.emplace_back(row, sidx, -1.0);
-    //     lb_out[row] = rhs;
-    //     ub_out[row] = 1e20;
-    //     row++;
-    //   }
-    //   slack_counter++;
-    // }
+    int slack_counter = 0;
+    for (int k=0;k<N;k++){
+      int xkp1_idx = n_u + k*nx;
+      for (size_t cidx=0;cidx<obs_lin[k].size();++cidx){
+        auto pr = obs_lin[k][cidx];
+        Eigen::Vector2d n = pr.first;
+        double rhs = pr.second;
+        // n_x * px + n_y * py - 1 * s >= rhs
+        triplets.emplace_back(row, xkp1_idx + 0, n.x());
+        triplets.emplace_back(row, xkp1_idx + 1, n.y());
+        int sidx = slack_base + slack_counter;
+        triplets.emplace_back(row, sidx, -1.0);
+        lb_out[row] = rhs;
+        ub_out[row] = 1e20;
+        row++;
+      }
+      slack_counter++;
+    }
 
-    // std::cout << "[MPCController] Obstacle constraints built up to row " << row << std::endl;
-    // std::cout << "[MPCController] Total constraints built: " << row << " / " << total_rows << std::endl;
-    // char a;
-    // std::cin >> a;
     // finalize A_out
     A_out.resize(total_rows, n_var);
     A_out.setFromTriplets(triplets.begin(), triplets.end());
@@ -387,10 +390,19 @@ void MPCController::buildConstraints(const std::vector<double> &distances,
 bool MPCController::solveMPC(Eigen::Vector2d& u0) {   
 
     // Dummy implementation - replace with actual QP solve
-    // u0.setZero();
-    for (int k = 0; k < N_; ++k) {
-        upred_[k][0] = 0.3;   // nominal forward speed
-        upred_[k][1] = 0.0;
+    u0.setZero();
+    // for (int k = 0; k < N_; ++k) {
+    //     upred_[k][0] = 0.3;   // nominal forward speed
+    //     upred_[k][1] = 0.0;
+    // }
+
+    // Check if current position is close to goal
+    Eigen::Vector2d pos = x0_.head<2>();
+    Eigen::Vector2d goal_pos = goal_.head<2>();
+    double distance_to_goal = (goal_pos - pos).norm();
+    if (distance_to_goal < stop_radius_) {
+        u0.setZero();
+        return true;
     }
 
     // Initialize the prediction rollout [upred_ is all zeros initially]
@@ -401,28 +413,28 @@ bool MPCController::solveMPC(Eigen::Vector2d& u0) {
     std::vector<std::vector<std::pair<Eigen::Vector2d,double>>> obs_lin(N_);
 
     // get box obstacles
-    // for (int k=0;k<N_;++k) {
-    //   Eigen::Vector2d p_k(xpred_[k].head<2>());
-    //   // compute min distance and nearest obstacles
-    //   std::vector<std::pair<double,int>> dist_idx;
-    //   for (size_t i=0;i<num_obstacles_;++i) {
-    //     double d = obstacle_loader_->sdfBox2d(p_k, i);
-    //     dist_idx.emplace_back(d, (int)i);
-    //   }
-    //   std::sort(dist_idx.begin(), dist_idx.end(),
-    //             [](auto &a, auto &b){ return a.first < b.first; });
-    //   int K = std::min<int>(cost_params.nearestK, (int)dist_idx.size());
-    //   double dmin = 1e9;
-    //   for (int j=0;j<K;j++){
-    //     int idx = dist_idx[j].second;
-    //     double dij = dist_idx[j].first;
-    //     dmin = std::min(dmin, dij);
-    //     Eigen::Vector2d n; double rhs;
-    //     obstacle_loader_->linearizeBoxConstraint(idx, p_k, cost_params.robot_inflation, n, rhs);
-    //     obs_lin[k].push_back({n, rhs});
-    //   }
-    //   distances[k] = dmin;
-    // }
+    for (int k=0;k<N_;++k) {
+      Eigen::Vector2d p_k(xpred_[k].head<2>());
+      // compute min distance and nearest obstacles
+      std::vector<std::pair<double,int>> dist_idx;
+      for (size_t i=0;i<num_obstacles_;++i) {
+        double d = obstacle_loader_->sdfBox2d(p_k, i);
+        dist_idx.emplace_back(d, (int)i);
+      }
+      std::sort(dist_idx.begin(), dist_idx.end(),
+                [](auto &a, auto &b){ return a.first < b.first; });
+      int K = std::min<int>(cost_params.nearestK, (int)dist_idx.size());
+      double dmin = 1e9;
+      for (int j=0;j<K;j++){
+        int idx = dist_idx[j].second;
+        double dij = dist_idx[j].first;
+        dmin = std::min(dmin, dij);
+        Eigen::Vector2d n; double rhs;
+        obstacle_loader_->linearizeBoxConstraint(idx, p_k, cost_params.robot_inflation, n, rhs);
+        obs_lin[k].push_back({n, rhs});
+      }
+      distances[k] = dmin;
+    }
 
     // Build QP (dense H,g and constraints) then convert to sparse and call OSQP
     Eigen::MatrixXd H; Eigen::VectorXd g;
