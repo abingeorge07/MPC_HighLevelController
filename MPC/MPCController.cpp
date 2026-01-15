@@ -1,7 +1,6 @@
 /*
 MPC Controller Implementation
 */
-
 #include "MPCController.hpp"
 
 MPCController::MPCController(const std::string& ObstacleFile) {
@@ -41,7 +40,7 @@ MPCController::MPCController(const std::string& ObstacleFile) {
     cost_params.w_speed_max = 50.0;
 
     // Update the W_slack value
-    cost_params.W_slack = 1e6;
+    cost_params.W_slack = 1e8;
 
     // warm start buffers
     xpred_.assign(N_+1, Eigen::Vector3d::Zero());
@@ -124,11 +123,11 @@ void MPCController::buildReferences()
 void MPCController::set_references(const Eigen::Vector3d& x0, const Eigen::Vector3d& goal) {
     this->set_initial_state(x0);
     this->set_goal_state(goal);
-    this->buildReferences();
 }
 
 // Build dense H and g for cost only (not constraints)
 void MPCController::build_mpc_cost_dense(const std::vector<double> &distances,
+                                        int total_obs_constraints,
                                         int& n_var_out, int& slack_base, 
                                         Mat& H_out,
                                         Vec& g_out) {
@@ -138,9 +137,10 @@ void MPCController::build_mpc_cost_dense(const std::vector<double> &distances,
 
   MPCCostParams& P = this->cost_params;
 
+
   // estimate slack count: upper bound K_per_step * N; in this cost-only builder we need slack variables to allocate space.
-  int K_per_step = 1; // at least one slack per timestep (worst-case single aggregated slack)
-  int n_slack = K_per_step * N;
+  // int K_per_step = 1; // at least one slack per timestep (worst-case single aggregated slack)
+  int n_slack = total_obs_constraints;
 
   int n_u = N * nu;
   int n_x = N * nx; // x1..xN
@@ -156,7 +156,7 @@ void MPCController::build_mpc_cost_dense(const std::vector<double> &distances,
 
   auto u_idx = [&](int k)->int { return k * nu; };                      // 0..N-1
   auto x_idx = [&](int k)->int { return n_u + (k-1) * nx; };           // k in 1..N
-  auto s_idx = [&](int k, int j)->int { return slack_base + k * K_per_step + j; };
+  // auto s_idx = [&](int k, int j)->int { return slack_base + k * K_per_step + j; };
 
   // 1) control cost R and u_ref linear terms
   for (int k = 0; k < N; ++k) {
@@ -361,6 +361,7 @@ void MPCController::buildConstraints(const std::vector<double> &distances,
 
     // 3) Obstacle inequalities: for each k and each linearized obs constraint add:
     // n^T p_{k+1} - s_i >= rhs  --> variables: px,py indices inside x block, slack index
+    // In buildConstraints, fix the slack indexing:
     int slack_counter = 0;
     for (int k=0;k<N;k++){
       int xkp1_idx = n_u + k*nx;
@@ -371,13 +372,13 @@ void MPCController::buildConstraints(const std::vector<double> &distances,
         // n_x * px + n_y * py - 1 * s >= rhs
         triplets.emplace_back(row, xkp1_idx + 0, n.x());
         triplets.emplace_back(row, xkp1_idx + 1, n.y());
-        int sidx = slack_base + slack_counter;
+        int sidx = slack_base + slack_counter;  // One slack per constraint
         triplets.emplace_back(row, sidx, -1.0);
         lb_out[row] = rhs;
         ub_out[row] = 1e20;
         row++;
+        slack_counter++;  // Increment for each constraint
       }
-      slack_counter++;
     }
 
     // finalize A_out
@@ -390,11 +391,7 @@ void MPCController::buildConstraints(const std::vector<double> &distances,
 bool MPCController::solveMPC(Eigen::Vector2d& u0) {   
 
     // Dummy implementation - replace with actual QP solve
-    u0.setZero();
-    // for (int k = 0; k < N_; ++k) {
-    //     upred_[k][0] = 0.3;   // nominal forward speed
-    //     upred_[k][1] = 0.0;
-    // }
+    // u0.setZero();
 
     // Check if current position is close to goal
     Eigen::Vector2d pos = x0_.head<2>();
@@ -404,6 +401,9 @@ bool MPCController::solveMPC(Eigen::Vector2d& u0) {
         u0.setZero();
         return true;
     }
+
+    // Build references
+    this->buildReferences();
 
     // Initialize the prediction rollout [upred_ is all zeros initially]
     rolloutPrediction();
@@ -436,16 +436,31 @@ bool MPCController::solveMPC(Eigen::Vector2d& u0) {
       distances[k] = dmin;
     }
 
+
+    int total_obs_constraints = 0;
+    for (int k=0;k<N_;k++) total_obs_constraints += (int)obs_lin[k].size();
+  
+
     // Build QP (dense H,g and constraints) then convert to sparse and call OSQP
     Eigen::MatrixXd H; Eigen::VectorXd g;
     int n_var, slack_base;
-    build_mpc_cost_dense(distances, n_var, slack_base, H, g);
+    build_mpc_cost_dense(distances, total_obs_constraints, n_var, slack_base, H, g);
 
+    // std::cout << "[DEBUG] n_var=" << n_var << " slack_base=" << slack_base 
+    //           << " total_obs_constraints=" << total_obs_constraints << std::endl;
+
+    
     Eigen::SparseMatrix<double> Hs = H.sparseView();
 
     // // Build constraints: dynamics equalities, input bounds, obstacle inequalities with slacks.
     Eigen::SparseMatrix<double> A; Eigen::VectorXd lb, ub;
     buildConstraints(distances, obs_lin, n_var, slack_base, A, lb, ub);
+
+    // std::cout << "[DEBUG] A rows=" << A.rows() << " cols=" << A.cols() 
+    //           << " lb size=" << lb.size() << " ub size=" << ub.size() << std::endl;
+
+    // char a;
+    // std::cin >> a;
 
     // std::cout << "[MPCController] QP built: n_var=" << n_var<< std::endl;// << " n_cons=" << A.rows() << std::endl;
     // std::cout << "lb: " << lb.transpose() << std::endl;
