@@ -46,6 +46,8 @@ public:
 
     void closest_point_on_obb(const BoxObstacle& box, const Eigen::Vector2d& point,
                               Eigen::Vector2d& closest_out);
+    void boxSignedDistanceGradient(int idx, const Eigen::Vector2d& p, double inflation,
+                                   double& dist_out, Eigen::Vector2d& grad_out);         
     struct Obstacle obstacle_data;
 private:
     std::string filepath;

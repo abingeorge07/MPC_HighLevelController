@@ -84,21 +84,74 @@ void MPCController::buildReferences()
     xref_.assign(N_ + 1, Eigen::Vector3d::Zero());
     uref_.assign(N_, Eigen::Vector2d::Zero());
 
-    // --- Direction to goal --- // Remains constant since moving in straight line
-    Eigen::Vector2d dp = goal_.head<2>() - x0_.head<2>();
+    Eigen::Vector2d p0 = x0_.head<2>();
+    Eigen::Vector2d pg = goal_.head<2>();
+    Eigen::Vector2d dir = (pg - p0).normalized();
 
-    double path_theta = std::atan2(dp.y(), dp.x());
+    // Distance to goal
+    double dist_to_goal = (pg - p0).norm();
 
-    // --- State reference: straight-line interpolation ---
+    double step = dist_to_goal / N_;
+
+    Eigen::Vector2d p = p0;
+
+    double d;
+    Eigen::Vector2d grad;
+
     for (int k = 0; k <= N_; ++k) {
-        double a = static_cast<double>(k) / static_cast<double>(N_);
-        xref_[k].head<2>() = (1.0 - a) * x0_.head<2>() + a * goal_.head<2>();
-        xref_[k](2) = path_theta;
+      
+      // obstacle-aware lateral push
+      Eigen::Vector2d repel = Eigen::Vector2d::Zero();
+
+      for (size_t i = 0; i < num_obstacles_; ++i) {
+          // double d = obstacle_loader_->sdfBox2d(p, i);
+          // if (d < cost_params.d_limit) {
+          //     Eigen::Vector2d n;
+          //     double rhs;
+          //     obstacle_loader_->linearizeBoxConstraint(
+          //         i, p, cost_params.robot_inflation, n, rhs);
+          //     repel += (cost_params.d_limit - d) * n;
+          // }
+
+          obstacle_loader_->boxSignedDistanceGradient(i, p, cost_params.robot_inflation, d, grad);
+
+          if (d < cost_params.d_limit) {
+              repel += (cost_params.d_limit - d) * grad;
+          }
+      }
+
+      p += 0.5 * repel;  // tuning knob
+
+      xref_[k].head<2>() = p;
+      xref_[k](2) = std::atan2(dir.y(), dir.x());
+
+      // nominal straight advance
+      p += step * dir;
     }
 
+    
+    // Print all the xref values
+    for (int k = 0; k <= N_; ++k) {
+        std::cout << "xref[" << k << "]: " << xref_[k].transpose() << std::endl;
+    }
+
+    char a;
+    // std::cin >> a;
+
+    // --- Direction to goal --- // Remains constant since moving in straight line
+    // Eigen::Vector2d dp = goal_.head<2>() - x0_.head<2>();
+
+    // double path_theta = std::atan2(dp.y(), dp.x());
+
+    // // --- State reference: straight-line interpolation ---
+    // for (int k = 0; k <= N_; ++k) {
+    //     double a = static_cast<double>(k) / static_cast<double>(N_);
+    //     xref_[k].head<2>() = (1.0 - a) * x0_.head<2>() + a * goal_.head<2>();
+    //     xref_[k](2) = path_theta;
+    // }
+
     // --- Control reference ---
-    // Distance to goal
-    double dist_to_goal = dp.norm();
+    
 
     // // Nominal forward speed
     double v_nom = v_ref_;        // e.g. 0.3 m/s

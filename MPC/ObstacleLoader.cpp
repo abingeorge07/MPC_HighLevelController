@@ -174,28 +174,88 @@ void ObstacleLoader::closest_point_on_obb(const BoxObstacle& box, const Eigen::V
 }
 
 // Linearize box constraint at a given point
-void ObstacleLoader::linearizeBoxConstraint(int idx, const Eigen::Vector2d& point, double inflation,
-                                           Eigen::Vector2d& normal_out, double& rhs_out) {
+// void ObstacleLoader::linearizeBoxConstraint(int idx, const Eigen::Vector2d& point, double inflation,
+//                                            Eigen::Vector2d& normal_out, double& rhs_out) {
+//     const BoxObstacle& obs = obstacle_data.boxes[idx];
+
+//     Eigen::Vector2d q;
+    
+//     closest_point_on_obb(obs, point, q);
+
+//     Eigen::Vector2d diff = point - q;
+
+//     double d = diff.norm();
+    
+//     if (d < 1e-8) {
+//         // fallback: use vector from box center to pred
+//         diff = point - obs.position.head<2>();
+//         d = diff.norm();
+//         if (d < 1e-8) {
+//             normal_out = Eigen::Vector2d(1.0, 0.0);
+//             rhs_out = normal_out.dot(q) + inflation;
+//             return;
+//         }
+//     }
+//     normal_out = diff / d;
+//     rhs_out = normal_out.dot(q) + inflation;
+// }
+
+void ObstacleLoader::linearizeBoxConstraint(
+    int idx,
+    const Eigen::Vector2d& p,
+    double inflation,
+    Eigen::Vector2d& normal_out,
+    double& rhs_out)
+{
+    double d;
+    Eigen::Vector2d grad;
+
+    boxSignedDistanceGradient(idx, p, inflation, d, grad);
+
+    // Gradient of signed distance
+    normal_out = grad;
+
+    // First-order Taylor expansion:
+    // d(p) + ∇d(p)^T (x - p) >= 0
+    rhs_out = grad.dot(p) - d;
+}
+
+
+// Compute signed distance and its gradient for a box obstacle
+void ObstacleLoader::boxSignedDistanceGradient(
+    int idx,
+    const Eigen::Vector2d& p,
+    double inflation,
+    double& dist_out,
+    Eigen::Vector2d& grad_out)
+{
     const BoxObstacle& obs = obstacle_data.boxes[idx];
 
+    // Closest point on the (non-inflated) box
     Eigen::Vector2d q;
-    
-    closest_point_on_obb(obs, point, q);
+    closest_point_on_obb(obs, p, q);
 
-    Eigen::Vector2d diff = point - q;
-
+    Eigen::Vector2d diff = p - q;
     double d = diff.norm();
-    
-    if (d < 1e-8) {
-        // fallback: use vector from box center to pred
-        diff = point - obs.position.head<2>();
-        d = diff.norm();
-        if (d < 1e-8) {
-            normal_out = Eigen::Vector2d(1.0, 0.0);
-            rhs_out = normal_out.dot(q) + inflation;
-            return;
-        }
+
+    // Outside the box
+    if (d > 1e-8) {
+        dist_out = d - inflation;
+        grad_out = diff / d;  // ∇d(p)
+        return;
     }
-    normal_out = diff / d;
-    rhs_out = normal_out.dot(q) + inflation;
+
+    // Inside the box → fallback
+    Eigen::Vector2d center = obs.position.head<2>();
+    Eigen::Vector2d escape = p - center;
+    double esc_norm = escape.norm();
+
+    if (esc_norm < 1e-8) {
+        grad_out = Eigen::Vector2d(1.0, 0.0);
+        dist_out = -inflation;
+        return;
+    }
+
+    grad_out = escape / esc_norm;
+    dist_out = -inflation;
 }
