@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
         }
 
         // Print current state and control
-        std::cout << "Current state: [" << x0.transpose() << "], Applied control: [" << u0.transpose() << "]" << std::endl;
+        // std::cout << "Current state: [" << x0.transpose() << "], Applied control: [" << u0.transpose() << "]" << std::endl;
 
         // Here, you would apply u0 to the system and update x0 accordingly
         find_next_state(x0, u0, mpcController.cost_params.dt); // Placeholder function to update state [MAKE SURE THE DT IS THE SAME AS MPC DT]

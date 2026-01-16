@@ -32,7 +32,7 @@ MPCController::MPCController(const std::string& ObstacleFile) {
     // Cost for tracking controls (intermediate)
     cost_params.Q = Eigen::Matrix3d::Identity() * 10.0;
     cost_params.R  = Eigen::Matrix2d::Identity() * 100.0;
-    cost_params.Qf = Eigen::Matrix3d::Identity() * 5000.0;
+    cost_params.Qf = Eigen::Matrix3d::Identity() * 500.0;
 
     // Smoothness cost on delta u
     cost_params.S_delta = Eigen::Matrix2d::Identity() * 10.0;
@@ -84,92 +84,86 @@ void MPCController::buildReferences()
     xref_.assign(N_ + 1, Eigen::Vector3d::Zero());
     uref_.assign(N_, Eigen::Vector2d::Zero());
 
-    Eigen::Vector2d p0 = x0_.head<2>();
+    Eigen::Vector2d p = x0_.head<2>();
     Eigen::Vector2d pg = goal_.head<2>();
-    Eigen::Vector2d dir = (pg - p0).normalized();
 
-    // Distance to goal
-    double dist_to_goal = (pg - p0).norm();
+    Eigen::Vector2d dir0 = pg - p;
+    double dist_to_goal = dir0.norm();
+    if (dist_to_goal < 1e-6)
+        return;
 
+    dir0.normalize();
     double step = dist_to_goal / N_;
 
-    Eigen::Vector2d p = p0;
-
-    double d;
-    Eigen::Vector2d grad;
-
+    double k_rep = 1.0;     // repulsion gain
+    double max_rep = 1.0;   // clamp
+    
     for (int k = 0; k <= N_; ++k) {
-      
-      // obstacle-aware lateral push
+
       Eigen::Vector2d repel = Eigen::Vector2d::Zero();
 
       for (size_t i = 0; i < num_obstacles_; ++i) {
-          // double d = obstacle_loader_->sdfBox2d(p, i);
-          // if (d < cost_params.d_limit) {
-          //     Eigen::Vector2d n;
-          //     double rhs;
-          //     obstacle_loader_->linearizeBoxConstraint(
-          //         i, p, cost_params.robot_inflation, n, rhs);
-          //     repel += (cost_params.d_limit - d) * n;
-          // }
+          double d;
+          Eigen::Vector2d grad;
 
-          obstacle_loader_->boxSignedDistanceGradient(i, p, cost_params.robot_inflation, d, grad);
+          obstacle_loader_->boxSignedDistanceGradient(
+              i, p, cost_params.robot_inflation, d, grad);
 
           if (d < cost_params.d_limit) {
               repel += (cost_params.d_limit - d) * grad;
           }
       }
 
-      p += 0.5 * repel;  // tuning knob
+      // Clamp repulsion
+      if (repel.norm() > max_rep)
+          repel = max_rep * repel.normalized();
 
+      // Combine goal direction and repulsion
+      Eigen::Vector2d g = dir0;  // already normalized
+
+      Eigen::Vector2d n_perp = repel - g * (g.dot(repel));
+
+      Eigen::Vector2d v = g + k_rep * n_perp;
+
+      double max_lat = 0.8;
+      if (n_perp.norm() > max_lat)
+          n_perp = max_lat * n_perp.normalized();
+
+      if (v.norm() > 1e-6)
+          v.normalize();
+
+
+      // Save reference
       xref_[k].head<2>() = p;
-      xref_[k](2) = std::atan2(dir.y(), dir.x());
+      xref_[k](2) = std::atan2(v.y(), v.x());
 
-      // nominal straight advance
-      p += step * dir;
+      // Advance
+      p += step * v;
     }
 
-    
-    // Print all the xref values
+    // Print the references for debugging
     for (int k = 0; k <= N_; ++k) {
         std::cout << "xref[" << k << "]: " << xref_[k].transpose() << std::endl;
     }
 
     char a;
-    // std::cin >> a;
+    std::cin >> a;
 
-    // --- Direction to goal --- // Remains constant since moving in straight line
-    // Eigen::Vector2d dp = goal_.head<2>() - x0_.head<2>();
-
-    // double path_theta = std::atan2(dp.y(), dp.x());
-
-    // // --- State reference: straight-line interpolation ---
-    // for (int k = 0; k <= N_; ++k) {
-    //     double a = static_cast<double>(k) / static_cast<double>(N_);
-    //     xref_[k].head<2>() = (1.0 - a) * x0_.head<2>() + a * goal_.head<2>();
-    //     xref_[k](2) = path_theta;
-    // }
 
     // --- Control reference ---
-    
-
-    // // Nominal forward speed
-    double v_nom = v_ref_;        // e.g. 0.3 m/s
+    double v_nom = v_ref_;
     double w_nom = w_ref_;
 
-    // // Slow down when close to goal
-    double slow_radius = 0.5;     // meters
-    if (dist_to_goal < slow_radius) {
+    double slow_radius = 0.5;
+    if (dist_to_goal < slow_radius)
         v_nom *= dist_to_goal / slow_radius;
-    }
 
-    // Initialize uref only on first solve (warm start logic)
     if (first_solve_) {
-        for (int k = 0; k < N_; ++k) {
+        for (int k = 0; k < N_; ++k)
             uref_[k] << v_nom, w_nom;
-        }
     }
 }
+
 
 
 // Set initial and final states and build reference trajectories
